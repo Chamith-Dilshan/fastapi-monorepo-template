@@ -44,12 +44,11 @@ entrypoint = "app.main:app"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["app/tests"]
+testpaths = ["tests"]
 pythonpath = ["."]
 
 [tool.coverage.run]
 source = ["app"]
-omit = ["app/tests/*", "app/core/logging.py"]
 branch = true
 
 [tool.coverage.html]
