@@ -33,10 +33,6 @@ def custom_generate_unique_id(route: APIRoute) -> str:
     return f"{route.tags[0]}-{route.name}"
 
 
-# if settings.SENTRY_DSN and settings.FASTAPI_ENV != "development":
-#     sentry_sdk.init(dsn=str(settings.SENTRY_DSN), enable_tracing=True)
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # Required by FastAPI's lifespan signature; unused here, nothing
@@ -47,6 +43,7 @@ async def lifespan(_app: FastAPI):
     # F2 finding. Tests still use `create_all()` directly in
     # `tests/conftest.py`, which is a separate, deliberate shortcut.
     logger.info("app_startup", environment=settings.ENVIRONMENT)
+    # await create_tables()
     yield
     await engine.dispose()
     logger.info("app_shutdown")

@@ -15,23 +15,23 @@ dependencies = [
     #"psycopg[binary]>=3.3.4", # Newest version(V3) and if neede use this instead of psycopg2
     #"psycopg2-binary>=2.9.12", # Add because SQLAlchemy required this (use binary for faster/better performance)
     "asyncpg>=0.31.0", # PostgreSQL async driver that SQLAlchemy uses underneath when you create an async engine
-    "pyjwt>=2.13.0",
+    "pyjwt>=2.15.1",
     "sentry-sdk[fastapi]>=2.68.1,<3.0.0",
     "httpx>=0.28.1",
-    "alembic>=1.18.5",
-    "gunicorn>=26.0.0", # only works on Linux/WSL/container
+    "alembic>=1.20.0",
+    "gunicorn>=26.2.0", # only works on Linux/WSL/container
     "httptools>=0.8.0",
     "jinja2>=3.1.6",
     "structlog>=26.1.0",
     "contextvars>=2.4",
-    "opentelemetry-api>=1.30.0",
-    "opentelemetry-sdk>=1.30.0",
-    "opentelemetry-instrumentation-fastapi>=0.51b0",
-    "opentelemetry-instrumentation-sqlalchemy>=0.51b0",
-    "opentelemetry-instrumentation-logging>=0.51b0",
-    "opentelemetry-exporter-otlp-proto-http>=1.30.0",
+    "opentelemetry-api>=1.45.0",
+    "opentelemetry-sdk>=1.45.0",
+    "opentelemetry-instrumentation-fastapi>=0.66b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.66b0",
+    "opentelemetry-instrumentation-logging>=0.66b0",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.0",
     "resend>=2.9.0",
-    "authlib>=1.4.1", # Google OAuth (and any later provider) code-exchange
+    "authlib>=1.8.0", # Google OAuth (and any later provider) code-exchange
 ]
 
 [dependency-groups]
