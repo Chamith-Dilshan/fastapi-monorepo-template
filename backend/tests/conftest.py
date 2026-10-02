@@ -11,15 +11,13 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.main import app
 
-# Import models so the test metadata includes every table.
-from app.models.post import Post  # noqa: F401
-from app.models.post_like import PostLike  # noqa: F401
+# Import models so the test schema (built via create_all below, not
+# Alembic — a deliberate, separate shortcut for test isolation speed)
+# includes every table.
+from app.models.audit_log import AuditLog  # noqa: F401
+from app.models.oauth_account import OAuthAccount  # noqa: F401
+from app.models.otp_code import OTPCode  # noqa: F401
 from app.models.user import User  # noqa: F401
-from tests.fixtures.auth_fixtures import (  # noqa: F401
-    auth_headers,
-    authenticated_user,
-    user,
-)
 
 
 @pytest_asyncio.fixture
@@ -49,7 +47,11 @@ async def reset_database(db_engine) -> AsyncGenerator[None]:
 
 
 @pytest_asyncio.fixture
-async def db_session(reset_database, db_engine) -> AsyncGenerator[AsyncSession]:
+async def db_session(reset_database, db_engine) -> AsyncGenerator[AsyncSession]:  # noqa: ARG001
+    # `reset_database` is a pytest fixture dependency, not a value this
+    # fixture uses — the parameter *name* must match the fixture name
+    # exactly for pytest's injection to find it, so it can't be prefixed
+    # with `_` the way an ordinary unused argument would be.
     session_factory = async_sessionmaker(
         bind=db_engine,
         autoflush=False,

@@ -1,11 +1,11 @@
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
     ConflictException,
     NotFoundException,
+    UnauthorizedException,
 )
 from app.core.security import (
     get_password_hash,
@@ -38,9 +38,12 @@ class UserService:
 
         user = User(
             email=payload.email,
-            password=get_password_hash(payload.password),
+            hashed_password=get_password_hash(payload.password),
             first_name=payload.first_name,
             last_name=payload.last_name,
+            # role/is_active/is_verified take their column defaults
+            # (USER / True / False) — is_verified flips true once
+            # email-verification OTP support lands (step 3).
         )
 
         new_user = await self.repository.create(user)
@@ -68,14 +71,20 @@ class UserService:
     ) -> User | None:
         user = await self.repository.get_by_email(email)
 
-        if user is None or not verify_password(
-            password,
-            user.password,
+        # `user.hashed_password is None` covers an OAuth-only account
+        # (e.g., Google signup, step 4) trying to log in with a password it
+        # never set — the same generic message as a wrong password, so this
+        # doesn't leak which emails exist or how they signed up.
+        if (
+            user is None
+            or user.hashed_password is None
+            or not verify_password(password, user.hashed_password)
         ):
-            raise HTTPException(
-                detail="Invalid credentials",
-                status_code=status.HTTP_401_UNAUTHORIZED,
-            )
+            raise UnauthorizedException(message="Invalid credentials")
+
+        if not user.is_active:
+            raise UnauthorizedException(message="This account has been disabled")
+
         return user
 
     async def list_users(

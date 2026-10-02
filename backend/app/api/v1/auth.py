@@ -43,12 +43,18 @@ async def login_for_access_token(
     service = UserService(db)
     user = await service.authenticate_user(form_data.username, form_data.password)
 
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # if not user:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_401_UNAUTHORIZED,
+    #         detail="Incorrect username or password",
+    #         headers={"WWW-Authenticate": "Bearer"},
+    #     )
+
+    # authenticate_user raises UnauthorizedException (see
+    # app.core.exception_handlers) on any failure — wrong password, unknown
+    # email, OAuth-only account, or a disabled account — so there's no
+    # `if not user` branch here; a returned user is always valid.
+
     access_token = create_access_token(
         data={"sub": str(user.id)},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
@@ -59,12 +65,18 @@ async def login_for_access_token(
 @router.get("/me", response_model=UserResponse, status_code=status.HTTP_200_OK)
 async def read_users_me(current_user: CurrentUser, db: SessionDep) -> User:
     """Return the currently authenticated user's profile."""
-    if current_user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    service = UserService(db)
-    user = await service.get_user(current_user.id)
-    return user
+    # if current_user is None:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_401_UNAUTHORIZED,
+    #         detail="Could not validate credentials",
+    #         headers={"WWW-Authenticate": "Bearer"},
+    #     )
+    # service = UserService(db)
+    # user = await service.get_user(current_user.id)
+    # return user
+
+    # CurrentUser (get_current_user_dep) already raises on any failure —
+    # invalid token, or a token for a user that no longer exists — so
+    # current_user here is always a real, current row. No extra DB round
+    # trip needed to re-fetch what the dependency already fetched.
+    return current_user

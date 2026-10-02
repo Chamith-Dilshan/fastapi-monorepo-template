@@ -4,13 +4,13 @@ version = "0.1.0"
 description = "FastAPI Production Ready Backend Template"
 requires-python = ">=3.14,<4.0"
 dependencies = [
-    "fastapi[standard]==0.142.0",
+    "fastapi[standard]==0.142.2",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
     "email-validator>=2.3.0",
     "pwdlib[argon2]>=0.3.1",
     #"httpx2>=2.7.0",
-    "sqlalchemy[asyncio]>=2.0.51", # required asyncio dependencies (including greenlet in current versions). Starting
+    "sqlalchemy[asyncio]>=2.1.2", # required asyncio dependencies (including greenlet in current versions). Starting
     # with SQLAlchemy 2.0, the asyncio dependencies are no longer installed by default.
     #"psycopg[binary]>=3.3.4", # Newest version(V3) and if neede use this instead of psycopg2
     #"psycopg2-binary>=2.9.12", # Add because SQLAlchemy required this (use binary for faster/better performance)
@@ -22,6 +22,16 @@ dependencies = [
     "gunicorn>=26.0.0", # only works on Linux/WSL/container
     "httptools>=0.8.0",
     "jinja2>=3.1.6",
+    "structlog>=26.1.0",
+    "contextvars>=2.4",
+    "opentelemetry-api>=1.30.0",
+    "opentelemetry-sdk>=1.30.0",
+    "opentelemetry-instrumentation-fastapi>=0.51b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.51b0",
+    "opentelemetry-instrumentation-logging>=0.51b0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30.0",
+    "resend>=2.9.0",
+    "authlib>=1.4.1", # Google OAuth (and any later provider) code-exchange
 ]
 
 [dependency-groups]
@@ -49,6 +59,10 @@ pythonpath = ["."]
 
 [tool.coverage.run]
 source = ["app"]
+omit = [
+    "app/core/logging.py",
+    "app/core/observability.py", # thin wiring around Sentry/OTel SDK init, not worth mocking
+]
 branch = true
 
 [tool.coverage.html]
@@ -75,7 +89,13 @@ target-version = ["py314"]
 [tool.ruff]
 line-length = 88
 target-version = "py314"
-exclude = ["alembic"]
+# IMPORTANT: `exclude` (vs `extend-exclude`) REPLACES Ruff's built-in
+# default exclude list (.venv, .git, __pycache__, etc.) instead of adding
+# to it. The previous `exclude = ["alembic"]` here meant every `ruff
+# check .` was also linting the entire virtualenv's third-party source —
+# tens of thousands of findings from code we don't own and can't fix.
+# `extend-exclude` keeps Ruff's defaults and adds `alembic` on top.
+extend-exclude = ["alembic"]
 
 [tool.ruff.lint]
 select = [
