@@ -31,14 +31,8 @@ router = APIRouter(
     prefix=f"{settings.API_V1_PREFIX}/auth",
 )
 
-# Note on the explicit `await db.commit()` calls below: UserRepository's
-# create/update/delete already commit internally (existing convention,
-# see app/repositories/user_repository.py), while OTPRepository
-# deliberately only flushes (see its docstring) so an OTP row and whatever
-# it gates (marking verified, resetting a password, enabling 2FA) land in
-# one transaction. Routes commit explicitly so that guarantee doesn't
-# depend on which repository happens to run last — if UserRepository's
-# auto-commit is ever refactored away, these routes don't silently break.
+# No `db.commit()` anywhere in this file, on purpose — app.core.database.get_db
+# owns the transaction boundary for the whole request. See its docstring.
 
 # Reusable alias
 CurrentUser = Annotated[User, Depends(get_current_user_dep)]
@@ -80,7 +74,6 @@ async def login_for_access_token(
     if user.is_2fa_enabled:
         otp_service = OTPService(db)
         await otp_service.generate_and_send(user, OTPPurpose.TWO_FACTOR)
-        await db.commit()
         return LoginResponse(two_factor_required=True)
 
     token = _issue_token(user)
@@ -104,7 +97,6 @@ async def read_users_me(current_user: CurrentUser) -> User:
 async def request_email_verification(current_user: CurrentUser, db: SessionDep) -> dict:
     otp_service = OTPService(db)
     await otp_service.generate_and_send(current_user, OTPPurpose.EMAIL_VERIFICATION)
-    await db.commit()
     return {"detail": "Verification code sent"}
 
 
@@ -116,7 +108,6 @@ async def confirm_email_verification(
     await otp_service.verify(current_user, OTPPurpose.EMAIL_VERIFICATION, payload.code)
     service = UserService(db)
     user = await service.mark_verified(current_user)
-    await db.commit()
     return user
 
 
@@ -135,7 +126,6 @@ async def forgot_password(payload: OTPRequestRequest, db: SessionDep) -> dict:
     if user is not None:
         otp_service = OTPService(db)
         await otp_service.generate_and_send(user, OTPPurpose.PASSWORD_RESET)
-        await db.commit()
     return {"detail": "If that email is registered, a reset code has been sent"}
 
 
@@ -153,7 +143,6 @@ async def reset_password(payload: PasswordResetRequest, db: SessionDep) -> dict:
     otp_service = OTPService(db)
     await otp_service.verify(user, OTPPurpose.PASSWORD_RESET, payload.code)
     await service.set_password(user, payload.new_password)
-    await db.commit()
     return {"detail": "Password updated"}
 
 
@@ -172,7 +161,6 @@ async def verify_two_factor(payload: TwoFactorVerifyRequest, db: SessionDep) -> 
 
     otp_service = OTPService(db)
     await otp_service.verify(user, OTPPurpose.TWO_FACTOR, payload.code)
-    await db.commit()
     return _issue_token(user)
 
 
@@ -184,7 +172,6 @@ async def request_enable_two_factor(current_user: CurrentUser, db: SessionDep) -
     """
     otp_service = OTPService(db)
     await otp_service.generate_and_send(current_user, OTPPurpose.TWO_FACTOR)
-    await db.commit()
     return {"detail": "Confirmation code sent"}
 
 
@@ -196,7 +183,6 @@ async def confirm_enable_two_factor(
     await otp_service.verify(current_user, OTPPurpose.TWO_FACTOR, payload.code)
     service = UserService(db)
     user = await service.set_2fa_enabled(current_user, enabled=True)
-    await db.commit()
     return user
 
 
@@ -205,7 +191,7 @@ async def disable_two_factor(
     payload: TwoFactorDisableRequest, current_user: CurrentUser, db: SessionDep
 ) -> User:
     """Gated by the account's current password, not a fresh OTP — this is
-    turning a protection *off*, so it should require something the holder
+    turning protection *off*, so it should require something the holder
     already knows, not a code sent to the same inbox the account is
     presumably still protecting.
     """
@@ -214,5 +200,4 @@ async def disable_two_factor(
         raise UnauthorizedException(message="Incorrect password")
 
     user = await service.set_2fa_enabled(current_user, enabled=False)
-    await db.commit()
     return user

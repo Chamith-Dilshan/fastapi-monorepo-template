@@ -103,5 +103,30 @@ AsyncSessionFactory = async_sessionmaker(
 
 
 async def get_db() -> AsyncGenerator[AsyncSession]:
+    """One transaction per request. This is the *only* place that commits
+    — every repository (UserRepository, OTPRepository, OAuthRepository)
+    only ever flushes, deliberately. That means:
+
+    - A route calling two different repositories (e.g., verifying an OTP
+      via OTPRepository, then updating the user via UserRepository) gets
+      atomicity for free, without the route needing to know transactions
+      exist — the two flushes land together in one commit when the
+      request finishes cleanly.
+    - If anything raises partway through a request — including one of our
+      own AppException subclasses — everything that happened earlier in
+      that same request rolls back too, instead of leaving whatever
+      already-committed writes happened before the failure.
+
+    No route or service should call `db.commit()` directly; if one needs
+    to guarantee a prior write is durable before doing something external
+    (sending an email, calling a third-party API), that's a sign the work
+    should be split across two requests/transactions, not a reason to
+    commit early here.
+    """
     async with AsyncSessionFactory() as session:
-        yield session
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise

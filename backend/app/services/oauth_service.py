@@ -133,7 +133,9 @@ class OAuthService:
             # the user row does too. Asserted rather than silently typed
             # as User | None, so a future change to that constraint fails
             # loudly here instead of producing a confusing None downstream.
-            assert user is not None, "OAuthAccount referenced a user that no longer exists"
+            assert user is not None, (
+                "OAuthAccount referenced a user that no longer exists"
+            )
             return user, False
 
         # No link yet. If a user with this email already exists (they
@@ -154,14 +156,20 @@ class OAuthService:
             )
             user = await self.user_repository.create(user)
 
-        await self.oauth_repository.create(user.id, provider, profile.provider_account_id)
-        await self.db.commit()
+        await self.oauth_repository.create(
+            user.id, provider, profile.provider_account_id
+        )
+        # No commit here — app.core.database.get_db commits once for the
+        # whole request. Both the user creation above and this link land
+        # together when the /auth/google/callback route returns.
         return user, is_new_user
 
     async def issue_token_and_welcome(self, user: User, *, is_new_user: bool) -> Token:
         if is_new_user:
             try:
-                await EmailService().send_welcome_email(to=user.email, first_name=user.first_name)
+                await EmailService().send_welcome_email(
+                    to=user.email, first_name=user.first_name
+                )
             except Exception:
                 # Same reasoning as otp_service: a failed welcome email is
                 # not a failed sign-in.

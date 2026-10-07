@@ -1,7 +1,8 @@
 # keep these models to create tables in db
-import app.models.models  # noqa: F401
-from app.core.base import Base
-from app.core.database import engine
+# import app.models.models  # noqa: F401
+
+# from app.core.base import Base
+# from app.core.database import engine
 
 """
 Not called by app.main anymore — schema now comes from Alembic
