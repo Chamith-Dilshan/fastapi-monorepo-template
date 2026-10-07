@@ -73,7 +73,7 @@ class UserService:
 
         # `user.hashed_password is None` covers an OAuth-only account
         # (e.g., Google signup, step 4) trying to log in with a password it
-        # never set — the same generic message as a wrong password, so this
+        # never set — same generic message as a wrong password, so this
         # doesn't leak which emails exist or how they signed up.
         if (
             user is None
@@ -86,6 +86,38 @@ class UserService:
             raise UnauthorizedException(message="This account has been disabled")
 
         return user
+
+    async def get_user_by_email(self, email: str) -> User | None:
+        """Unlike `get_user`, does not raise on a miss — callers that need
+        to stay silent about whether an email exists (OTP request,
+        password-reset request) check for `None` themselves rather than
+        catching NotFoundException, so "no such user" and "DB error" can't
+        get confused with each other at the call site.
+        """
+        return await self.repository.get_by_email(email)
+
+    async def set_password(self, user: User, new_password: str) -> User:
+        user.hashed_password = get_password_hash(new_password)
+        return await self.repository.update(user)
+
+    async def mark_verified(self, user: User) -> User:
+        user.is_verified = True
+        return await self.repository.update(user)
+
+    async def set_2fa_enabled(self, user: User, *, enabled: bool) -> User:
+        user.is_2fa_enabled = enabled
+        return await self.repository.update(user)
+
+    async def check_password(self, user: User, password: str) -> bool:
+        """Returns a bool instead of raising — used where the caller wants
+        to decide what failure means for itself (e.g. the 2FA-disable
+        endpoint, which should give a normal `InvalidOTPException`-style
+        400, not treat a wrong confirmation password as a full
+        `authenticate_user`-style 401 login failure).
+        """
+        if user.hashed_password is None:
+            return False
+        return verify_password(password, user.hashed_password)
 
     async def list_users(
         self,
@@ -106,6 +138,17 @@ class UserService:
         user = await self.get_user(user_id)
 
         update_data = payload.model_dump(exclude_unset=True)
+
+        # UserUpdateRequest.password is a plain-text field (API input
+        # shape); User.hashed_password is the actual column. A blind
+        # setattr loop over DTO field names would either silently no-op
+        # (the column is named differently, so it'd set a stray
+        # non-persisted attribute) or, worse, write an unhashed password
+        # straight to the DB if the names ever matched again — handle it
+        # explicitly instead of ever letting that loop touch credentials.
+        password = update_data.pop("password", None)
+        if password is not None:
+            user.hashed_password = get_password_hash(password)
 
         for field, value in update_data.items():
             setattr(user, field, value)

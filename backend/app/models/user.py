@@ -79,6 +79,13 @@ class User(Base):
         Boolean, default=False, server_default=text("false"), nullable=False
     )
 
+    # When true, UserService.authenticate_user succeeding is not enough to
+    # issue tokens — the login endpoint instead sends a two_factor OTP and
+    # the client must call /auth/2fa/verify. See services/otp_service.py.
+    is_2fa_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True, nullable=False
     )

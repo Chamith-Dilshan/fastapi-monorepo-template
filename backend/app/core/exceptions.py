@@ -72,6 +72,22 @@ class UnauthorizedException(AppException):
         )
 
 
+class InvalidOTPException(AppException):
+    """Wrong code, expired code, already-used code, too many attempts, or
+    no active code at all for that purpose — deliberately one exception
+    and one message for every one of those cases. Distinguishing them in
+    the response would let an attacker tell "expired" from "wrong" from
+    "never requested", which is exactly the kind of oracle an OTP flow
+    should not hand out. The real reason is still in the log line
+    (`app.services.otp_service`), just not in the HTTP response.
+    """
+
+    def __init__(
+        self, message: str = "Invalid or expired code", status_code: int = 400
+    ):
+        super().__init__(status_code, message, error_code="invalid_otp")
+
+
 class DatabaseException(AppException):
     """Raised by the repository layer when an SQLAlchemy call fails.
 

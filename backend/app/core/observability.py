@@ -10,7 +10,7 @@ Two independent, separately gated pieces:
   only establishes the tracer provider and the FastAPI/SQLAlchemy
   auto-instrumentation every request already benefits from.
 - Sentry: hosted, per `BACKEND_DEVELOPMENT_PLAN.md` Section 15 (self-hosting
-  Sentry was evaluated and rejected as disproportionate operational load for
+  Sentry was evaluated and rejected as a disproportionate operational load for
   this stage). Off unless `SENTRY_DSN` is set and never enabled in local
   dev even if a DSN is present, so local exceptions don't get reported.
 """
@@ -33,7 +33,7 @@ def configure_sentry() -> None:
         environment=settings.ENVIRONMENT,
         release=settings.APP_VERSION,
         enable_tracing=True,
-        # Traces are inexpensive to sample down; errors are always sent.
+        # Traces are cheap to sample down; errors are always sent.
         traces_sample_rate=0.1,
     )
     logger.info("sentry_configured", environment=settings.ENVIRONMENT)

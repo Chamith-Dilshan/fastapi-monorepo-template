@@ -20,7 +20,7 @@ class OTPPurpose(StrEnum):
 
 
 class OTPCode(Base):
-    """One mechanism, three purposes. `otp_service.py` always
+    """One mechanism, three purposes. `otp_service.py` (step 3) always
     verifies purpose + expiry + attempt count together — never just "does
     this code match any row for this user".
 
@@ -63,7 +63,7 @@ class OTPCode(Base):
     )
 
     # Failed to verify attempts against this specific row. otp_service should
-    # stop accepting attempts past a small limit (e.g., 5) even before
+    # stop accepting attempts past a small limit (e.g. 5) even before
     # expiry, to blunt brute-forcing a 6-digit code.
     attempts: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False

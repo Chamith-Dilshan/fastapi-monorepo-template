@@ -14,7 +14,8 @@ class AuditLog(Base):
     `app.core.middleware.RequestContextMiddleware`. This table is for
     actions worth being able to answer "who did this, when, and what changed"
     for later: role/permission changes, deletions, and — once the workspace
-    overlay and `VERIFIED`-tag correction flow exist — every human
+    overlay and `VERIFIED`-tag correction flow exist (`PROJECT_BIBLE.md`
+    Section 5, `BACKEND_DEVELOPMENT_PLAN.md` Section 3) — every human
     correction to a graph fact. `before`/`after` already matches that
     corrections-version-never-overwrite shape, so this table doesn't need to
     change shape when that flow lands; it just starts getting called from

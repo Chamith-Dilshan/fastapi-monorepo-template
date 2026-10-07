@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Your verification code{% endblock %}
+{% block content %}
+  <p style="font-size:14px; color:#3f3f46; margin:0 0 16px;">{{ intro_text }}</p>
+  <div style="font-size:32px; font-weight:700; letter-spacing:6px; color:#18181b; background-color:#f4f4f5; border-radius:6px; padding:16px 24px; text-align:center; margin:0 0 16px;">
+    {{ code }}
+  </div>
+  <p style="font-size:13px; color:#71717a; margin:0;">This code expires in {{ expire_minutes }} minutes and can only be used once.</p>
+{% endblock %}

@@ -52,6 +52,31 @@ class Settings(BaseSettings):
 
     OTEL_ENABLED: bool = False
     OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
+
+    # --- Frontend / email --------------------------------------------------
+    # Used for the Google OAuth redirect destination and (if ever needed)
+    # links inside emails. No trailing slash.
+    FRONTEND_URL: str = "http://localhost:3000"
+
+    # "console" (default — logs the email, sends nothing) or "resend".
+    # Kept separate from ENVIRONMENT on purpose: a staging box might still
+    # want console-only email, and local dev might occasionally want to
+    # test real Resend delivery against a sandbox address.
+    EMAIL_PROVIDER: Literal["console", "resend"] = "console"
+    EMAIL_FROM_ADDRESS: str = "onboarding@resend.dev"
+    EMAIL_FROM_NAME: str = "App"
+    RESEND_API_KEY: str | None = None
+
+    # --- OTP -----------------------------------------------------------
+    OTP_LENGTH: int = 6
+    OTP_EXPIRE_MINUTES: int = 10
+    OTP_MAX_ATTEMPTS: int = 5
+
+    # --- OAuth: Google -------------------------------------------------
+    GOOGLE_CLIENT_ID: str | None = None
+    GOOGLE_CLIENT_SECRET: str | None = None
+    # Must exactly match a redirect URI registered in Google Cloud Console.
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
     # Langfuse doubles as the OTel-native eval harness backend (see
     # PROJECT_BIBLE.md Section 10) — these are consumed once the
     # agents/extraction packages exist, wired through here from day one so
@@ -113,6 +138,14 @@ class Settings(BaseSettings):
     def _enforce_non_default_secrets(self) -> Self:
         self._check_default_secret("SECRET_KEY", self.SECRET_KEY)
         self._check_default_secret("POSTGRES_PASSWORD", self.POSTGRES_PASSWORD)
+        return self
+
+    @model_validator(mode="after")
+    def _require_resend_key_when_selected(self) -> Self:
+        # Catches "EMAIL_PROVIDER=resend but forgot RESEND_API_KEY" at
+        # startup, not at the first password-reset request in production.
+        if self.EMAIL_PROVIDER == "resend" and not self.RESEND_API_KEY:
+            raise ValueError("EMAIL_PROVIDER=resend requires RESEND_API_KEY to be set.")
         return self
 
     @property

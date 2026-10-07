@@ -4,8 +4,9 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
+from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.api.v1 import auth, users
+from app.api.v1 import auth, oauth, users
 from app.core.config import settings
 from app.core.database import engine
 from app.core.exception_handlers import register_exception_handlers
@@ -30,7 +31,12 @@ def custom_generate_unique_id(route: APIRoute) -> str:
     # this, `openapi-ts` derives names from FastAPI's auto-generated
     # operation ids, which shift whenever a route's path or function name
     # changes and churn the generated client for no real reason.
-    return f"{route.tags[0]}-{route.name}"
+    # Not every route has a tag (e.g., the Prometheus /metrics route added
+    # below has none) — fall back to the plain route name rather than
+    # assuming route.tags[0] exists.
+    if route.tags:
+        return f"{route.tags[0]}-{route.name}"
+    return route.name
 
 
 @asynccontextmanager
@@ -70,7 +76,15 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(oauth.router)
 app.include_router(users.router)
+
+# Exposes GET /metrics in Prometheus text format — request counts, latency
+# histograms, in-progress requests, by path/method/status. Always on:
+# unlike OTEL_ENABLED (which ships spans to a collector over the network),
+# this just serves a local text endpoint for something else to scrape, so
+# there's no equivalent "nothing to scrape it yet" cost to gate against.
+Instrumentator().instrument(app).expose(app, include_in_schema=False)
 
 
 @app.get("/health", tags=["health"])

@@ -19,6 +19,14 @@ logger = structlog.get_logger("app.request")
 
 REQUEST_ID_HEADER = "X-Request-ID"
 
+# Polled constantly by infrastructure (Compose health check, Prometheus
+# scraping every ~15s) rather than caused by a user action — an access-log
+# line per hit is noise, not signal. The request id is still generated and
+# set on the response either way; only the INFO/WARNING log line is
+# skipped, so a failure on one of these still logs via the `except` branch
+# below (errors are signal even here).
+_UNLOGGED_PATHS = frozenset({"/health", "/health/ready", "/metrics"})
+
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp) -> None:
@@ -53,14 +61,15 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
         response.headers[REQUEST_ID_HEADER] = request_id
 
-        log_method = logger.warning if response.status_code >= 400 else logger.info
-        log_method(
-            "request_finished",
-            method=request.method,
-            path=request.url.path,
-            status_code=response.status_code,
-            duration_ms=duration_ms,
-        )
+        if request.url.path not in _UNLOGGED_PATHS or response.status_code >= 400:
+            log_method = logger.warning if response.status_code >= 400 else logger.info
+            log_method(
+                "request_finished",
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                duration_ms=duration_ms,
+            )
 
         request_id_var.reset(token)
         structlog.contextvars.unbind_contextvars("request_id")
