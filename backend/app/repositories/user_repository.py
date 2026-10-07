@@ -13,7 +13,13 @@ class UserRepository:
     async def create(self, user: User) -> User:
         self.db.add(user)
 
-        await self.db.commit()
+        # flush, not commit — the request-scoped transaction commits once,
+        # in app.core.database.get_db, after the whole request succeeds.
+        # flush still sends the INSERT and lets server-generated defaults
+        # (id, created_at) populate, so the refresh() below works the same
+        # as it did with commit(); it just isn't durable/visible to other
+        # connections until get_db's commit happens.
+        await self.db.flush()
         await self.db.refresh(user)
 
         return user
@@ -58,13 +64,13 @@ class UserRepository:
         user: User,
     ) -> None:
         await self.db.delete(user)
-        await self.db.commit()
+        await self.db.flush()
 
     async def update(
         self,
         user: User,
     ) -> User:
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(user)
 
         return user

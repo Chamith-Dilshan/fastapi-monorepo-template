@@ -25,6 +25,15 @@ LimitQuery = Annotated[int, Query(ge=1, le=100)]
 # Reusable alias
 CurrentUser = Annotated[User, Depends(get_current_user_dep)]
 
+# NOTE: every route below requires *a* valid logged-in user (via
+# CurrentUser), but not yet a specific role — any authenticated user can
+# currently list/view/edit/delete any other user by id. That's a real gap,
+# not just unused-argument noise: once `core/rbac.py` and
+# `require_role()` land (ground-template plan, step 5), these should
+# become `require_role(UserRole.ADMIN)` instead of a bare `CurrentUser`.
+# The leading underscore below is only there to tell Ruff the parameter
+# is deliberately unused for now, not a statement that auth is unused.
+
 
 @router.get(
     "",
@@ -32,7 +41,7 @@ CurrentUser = Annotated[User, Depends(get_current_user_dep)]
 )
 async def list_users(
     db: SessionDep,
-    current_user: CurrentUser,
+    _current_user: CurrentUser,
     skip: SkipQuery = 0,
     limit: LimitQuery = 10,
 ):
@@ -53,7 +62,7 @@ async def list_users(
     "/{user_id}",
     response_model=UserResponse,
 )
-async def get_user(user_id: UUID, db: SessionDep, current_user: CurrentUser):
+async def get_user(user_id: UUID, db: SessionDep, _current_user: CurrentUser):
     service = UserService(db)
 
     return await service.get_user(user_id)
@@ -61,7 +70,10 @@ async def get_user(user_id: UUID, db: SessionDep, current_user: CurrentUser):
 
 @router.patch("/{user_id}", response_model=UserResponse)
 async def update_user(
-    user_id: UUID, payload: UserUpdateRequest, db: SessionDep, current_user: CurrentUser
+    user_id: UUID,
+    payload: UserUpdateRequest,
+    db: SessionDep,
+    _current_user: CurrentUser,
 ):
     service = UserService(db)
 
@@ -75,7 +87,7 @@ async def update_user(
     "/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_user(user_id: UUID, db: SessionDep, current_user: CurrentUser):
+async def delete_user(user_id: UUID, db: SessionDep, _current_user: CurrentUser):
     service = UserService(db)
 
     await service.delete_user(user_id)
