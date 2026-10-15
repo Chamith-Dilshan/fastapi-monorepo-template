@@ -39,6 +39,9 @@ htmlcov/
 # IDE and editors
 .vscode/
 .idea/
+frontend/.idea
+frontend/.next
+frontend/node_modules
 *.swp
 *.swo
 *~

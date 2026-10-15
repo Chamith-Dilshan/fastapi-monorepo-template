@@ -33,6 +33,8 @@ dependencies = [
     "resend>=2.49.1",
     "authlib>=1.8.0", # Google OAuth (and any later provider) code-exchange
     "prometheus-fastapi-instrumentator>=8.1.0",
+    "aiosmtplib>=5.1.3",
+    "starlette>=1.7.0",
 ]
 
 [dependency-groups]

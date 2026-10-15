@@ -30,11 +30,23 @@ class Settings(BaseSettings):
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
 
-    TEST_DB: str
+    # Only needed to run the test suite — deliberately optional so a
+    # production deployment doesn't have to invent a database name it never
+    # uses. See `test_database_url` for the guard rails.
+    TEST_DB: str | None = None
 
     SECRET_KEY: str
     ALGORITHM: str
+    # Short on purpose for refresh tokens — a leaked access
+    # token is only useful for this long.
     ACCESS_TOKEN_EXPIRE_MINUTES: int
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # Optional bootstrap admin, created by `python -m app.initial_data`
+    # (run from scripts/prestart.sh). Both must be set for it to do
+    # anything; see app/initial_data.py.
+    FIRST_ADMIN_EMAIL: str | None = None
+    FIRST_ADMIN_PASSWORD: str | None = None
 
     # Comma-separated list of allowed origins, e.g.
     # "https://app.example.com,https://staging.example.com"
@@ -58,19 +70,43 @@ class Settings(BaseSettings):
     # links inside emails. No trailing slash.
     FRONTEND_URL: str = "http://localhost:3000"
 
-    # "console" (default — logs the email, sends nothing) or "resend".
+    # "console" (default — logs the email, sends nothing), "resend", or
+    # "smtp" (any SMTP server: a mail provider's relay, or Mailpit in dev).
     # Kept separate from ENVIRONMENT on purpose: a staging box might still
     # want console-only email, and local dev might occasionally want to
     # test real Resend delivery against a sandbox address.
-    EMAIL_PROVIDER: Literal["console", "resend"] = "console"
+    EMAIL_PROVIDER: Literal["console", "resend", "smtp"] = "console"
     EMAIL_FROM_ADDRESS: str = "onboarding@resend.dev"
     EMAIL_FROM_NAME: str = "App"
     RESEND_API_KEY: str | None = None
+
+    # Only read when EMAIL_PROVIDER=smtp. SMTP_TLS = upgrade a plain
+    # connection with STARTTLS (port 587); SMTP_SSL = TLS from the first byte
+    # (port 465). Never both. Mailpit in dev needs neither.
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_TLS: bool = True
+    SMTP_SSL: bool = False
 
     # --- OTP -----------------------------------------------------------
     OTP_LENGTH: int = 6
     OTP_EXPIRE_MINUTES: int = 10
     OTP_MAX_ATTEMPTS: int = 5
+    # Asking for another code while a fresh one is still outstanding does
+    # nothing. Several endpoints send email to an address the caller only
+    # *names* (verify, forgot-password), so without this anyone could use
+    # them to flood somebody's inbox.
+    OTP_RESEND_COOLDOWN_SECONDS: int = 60
+
+    # --- Housekeeping (python -m app.cleanup) --------------------------------
+    # Accounts that registered but never verified their email can't log in,
+    # and they squat the address. After this long they're removed.
+    UNVERIFIED_USER_TTL_DAYS: int = 7
+    # Audit logs are kept forever unless you set this. Deleting audit history
+    # is a policy decision (compliance, GDPR), so it is never the default.
+    AUDIT_LOG_RETENTION_DAYS: int | None = None
 
     # --- OAuth: Google -------------------------------------------------
     GOOGLE_CLIENT_ID: str | None = None
@@ -86,7 +122,10 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str | None = None
 
     model_config = SettingsConfigDict(
-        env_file=BASE_DIR / ".env",
+        # One shared `.env` at the repo root (the one docker compose reads),
+        # with an optional `backend/.env` layered on top for running the
+        # backend alone — later files win.
+        env_file=(BASE_DIR.parent / ".env", BASE_DIR / ".env"),
         extra="ignore",
     )
 
@@ -138,14 +177,23 @@ class Settings(BaseSettings):
     def _enforce_non_default_secrets(self) -> Self:
         self._check_default_secret("SECRET_KEY", self.SECRET_KEY)
         self._check_default_secret("POSTGRES_PASSWORD", self.POSTGRES_PASSWORD)
+        self._check_default_secret("FIRST_ADMIN_PASSWORD", self.FIRST_ADMIN_PASSWORD)
         return self
 
     @model_validator(mode="after")
-    def _require_resend_key_when_selected(self) -> Self:
-        # Catches "EMAIL_PROVIDER=resend but forgot RESEND_API_KEY" at
-        # startup, not at the first password-reset request in production.
+    def _require_credentials_for_the_selected_email_provider(self) -> Self:
+        # Catches "EMAIL_PROVIDER=resend but forgot RESEND_API_KEY" (or the
+        # SMTP equivalent) at startup, not at the first password-reset
+        # request in production.
         if self.EMAIL_PROVIDER == "resend" and not self.RESEND_API_KEY:
             raise ValueError("EMAIL_PROVIDER=resend requires RESEND_API_KEY to be set.")
+        if self.EMAIL_PROVIDER == "smtp":
+            if not self.SMTP_HOST:
+                raise ValueError("EMAIL_PROVIDER=smtp requires SMTP_HOST to be set.")
+            if self.SMTP_TLS and self.SMTP_SSL:
+                raise ValueError(
+                    "SMTP_TLS (STARTTLS) and SMTP_SSL (implicit TLS) are mutually exclusive."
+                )
         return self
 
     @property
@@ -161,6 +209,15 @@ class Settings(BaseSettings):
 
     @property
     def test_database_url(self) -> URL:
+        # The test suite drops and recreates every table in this database
+        # on each run (tests/conftest.py). Pointing it at the real
+        # database by accident would wipe it, so refuse loudly instead.
+        if not self.TEST_DB:
+            raise RuntimeError("TEST_DB must be set to run the test suite.")
+        if self.TEST_DB == self.POSTGRES_DB:
+            raise RuntimeError(
+                "TEST_DB must differ from POSTGRES_DB — tests drop all tables."
+            )
         return URL.create(
             drivername="postgresql+asyncpg",
             username=self.POSTGRES_USER,

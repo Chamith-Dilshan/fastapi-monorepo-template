@@ -9,15 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.base import Base
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.security import get_password_hash
 from app.main import app
 
-# Import models so the test schema (built via create_all below, not
-# Alembic — a deliberate, separate shortcut for test isolation speed)
-# includes every table.
-from app.models.audit_log import AuditLog  # noqa: F401
-from app.models.oauth_account import OAuthAccount  # noqa: F401
-from app.models.otp_code import OTPCode  # noqa: F401
-from app.models.user import User  # noqa: F401
+# Registers every model, so the test schema (built via create_all below,
+# not Alembic — a deliberate shortcut for test isolation speed) includes
+# every table without this file needing to list them.
+from app.models import models as _all_models  # noqa: F401
+from app.models.user import User, UserRole
 
 
 @pytest_asyncio.fixture
@@ -47,7 +46,7 @@ async def reset_database(db_engine) -> AsyncGenerator[None]:
 
 
 @pytest_asyncio.fixture
-async def db_session(reset_database, db_engine) -> AsyncGenerator[AsyncSession]:  # noqa: ARG001
+async def db_session(reset_database, db_engine) -> AsyncGenerator[AsyncSession]:
     # `reset_database` is a pytest fixture dependency, not a value this
     # fixture uses — the parameter *name* must match the fixture name
     # exactly for pytest's injection to find it, so it can't be prefixed
@@ -81,3 +80,86 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
 @pytest.fixture
 def faker() -> Faker:
     return Faker()
+
+
+DEFAULT_PASSWORD = "StrongP@ssw0rd!"
+
+
+@pytest_asyncio.fixture
+async def make_user(db_session: AsyncSession, faker: Faker):
+    """Creates a user straight in the database (bypassing the API), so a
+    test can have an admin/manager/disabled account without going through
+    registration, which only ever produces role=user.
+    """
+
+    async def _make(
+        *,
+        role: UserRole = UserRole.USER,
+        is_active: bool = True,
+        is_verified: bool = True,
+        password: str | None = DEFAULT_PASSWORD,
+        email: str | None = None,
+    ) -> User:
+        user = User(
+            email=email or faker.unique.email(),
+            hashed_password=get_password_hash(password) if password else None,
+            first_name=faker.first_name(),
+            last_name=faker.last_name(),
+            role=role,
+            is_active=is_active,
+            is_verified=is_verified,
+        )
+        db_session.add(user)
+        await db_session.flush()
+        return user
+
+    return _make
+
+
+@pytest_asyncio.fixture
+async def login(client: AsyncClient):
+    """Logs a user in through the real /auth/login and returns the JSON
+    body (access_token, refresh_token, ...)."""
+
+    async def _login(user: User, password: str = DEFAULT_PASSWORD) -> dict:
+        response = await client.post(
+            "/api/v1/auth/login",
+            data={"username": user.email, "password": password},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    return _login
+
+
+@pytest_asyncio.fixture
+async def auth_headers(login):
+    async def _headers(user: User, password: str = DEFAULT_PASSWORD) -> dict:
+        tokens = await login(user, password)
+        return {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    return _headers
+
+
+@pytest.fixture(autouse=True)
+def _no_resend_cooldown(monkeypatch):
+    """The resend cooldown would make back-to-back requests in a test
+    silently do nothing. Off by default; tests of the cooldown itself turn
+    it back on."""
+    monkeypatch.setattr(settings, "OTP_RESEND_COOLDOWN_SECONDS", 0)
+
+
+@pytest.fixture
+def sent_codes(monkeypatch) -> list[dict]:
+    """Stands in for email delivery and records what would have been sent —
+    the only way a test can learn a one-time code, since they are never
+    stored in the clear."""
+    sent: list[dict] = []
+
+    async def fake_send(self, *, to, purpose, code):
+        sent.append({"to": to, "purpose": purpose, "code": code})
+
+    monkeypatch.setattr(
+        "app.services.email_service.EmailService.send_otp_code", fake_send
+    )
+    return sent

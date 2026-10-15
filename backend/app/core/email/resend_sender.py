@@ -30,8 +30,8 @@ class ResendEmailSender(EmailSender):
             # real Resend error. A failed sending should not surface the raw
             # provider exception to the HTTP caller — see otp_service,
             # which treats "could I send" as an internal concern, not
-            # something that changes the response the client sees. (Same
-            # enumeration-safety reasoning as the request endpoint itself.)
+            # something that changes the response the client sees (same
+            # enumeration-safety reasoning as the request endpoint itself).
             logger.error("email_send_failed", to=to, subject=subject, exc_info=True)
             raise
         logger.info("email_sent", to=to, subject=subject)

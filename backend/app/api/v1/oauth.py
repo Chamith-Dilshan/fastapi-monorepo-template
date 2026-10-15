@@ -19,8 +19,11 @@ from fastapi.responses import RedirectResponse
 from app.core.config import settings
 from app.core.exceptions import UnauthorizedException
 from app.dependancies.database_dep import SessionDep
+from app.dtos.token_dto import OAuthExchangeRequest, Token
 from app.models.oauth_account import OAuthProvider
 from app.services.oauth_service import GoogleOAuthService, OAuthService
+from app.services.otp_service import OTPService
+from app.services.token_service import TokenService
 
 router = APIRouter(
     tags=["OAuth"],
@@ -66,18 +69,23 @@ async def google_callback(
     profile = await google.exchange_code_for_profile(code)
 
     oauth_service = OAuthService(db)
-    user, is_new_user = await oauth_service.find_or_create_user(OAuthProvider.GOOGLE, profile)
-    token = await oauth_service.issue_token_and_welcome(user, is_new_user=is_new_user)
+    user, is_new_user = await oauth_service.find_or_create_user(
+        OAuthProvider.GOOGLE, profile
+    )
+    code = await oauth_service.complete_sign_in(user, is_new_user=is_new_user)
 
-    # Bearer-token SPA, no server-side session — the token has to reach
-    # the frontend somehow, and a query param on a redirect is the
-    # standard way to do that without a shared cookie domain. Trade-off,
-    # on purpose: it's one step less secure than a one-time exchange code
-    # (the token can end up in browser history / a referrer header), but
-    # keeps this template's OAuth flow to two routes instead of three.
-    # Swap this for a short-lived exchange code if that trade-off doesn't
-    # fit a given deployment.
-    redirect_url = f"{settings.FRONTEND_URL}/auth/callback?access_token={token.access_token}"
-    response = RedirectResponse(url=redirect_url)
+    # The browser lands on the frontend with a single-use, 60-second code —
+    # never a token. Anything in a URL ends up in history, logs and
+    # referrers; a spent code is worthless there. The frontend trades it
+    # for real tokens with POST /auth/oauth/exchange.
+    response = RedirectResponse(
+        url=f"{settings.FRONTEND_URL}/auth/callback?code={code}"
+    )
     response.delete_cookie(_STATE_COOKIE_NAME)
     return response
+
+
+@router.post("/oauth/exchange", response_model=Token)
+async def exchange_oauth_code(payload: OAuthExchangeRequest, db: SessionDep) -> Token:
+    user = await OTPService(db).redeem_exchange_code(payload.code)
+    return await TokenService(db).issue_pair(user)

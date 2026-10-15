@@ -24,7 +24,9 @@ class UserLoginRequest(BaseModel):
 
 
 class UserUpdateRequest(BaseModel):
-    password: str | None = Field(default=None, min_length=8, max_length=255)
+    # Profile fields only. No password (see POST /auth/password/change,
+    # which requires the current one), no email (changing it would need
+    # re-verification), no role/status (admin-only endpoints).
     first_name: str | None = Field(default=None, max_length=100)
     last_name: str | None = Field(default=None, max_length=100)
 
@@ -47,3 +49,11 @@ class UserResponse(BaseModel):
 class UserListResponse(BaseModel):
     total: int
     items: list[UserResponse]
+
+
+class UserRoleUpdateRequest(BaseModel):
+    role: UserRole
+
+
+class UserStatusUpdateRequest(BaseModel):
+    is_active: bool

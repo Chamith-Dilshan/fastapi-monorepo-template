@@ -1,16 +1,12 @@
 from pydantic import BaseModel, EmailStr, Field
 
-from app.models.otp_code import OTPPurpose
 
-
-class OTPRequestRequest(BaseModel):
+class EmailRequest(BaseModel):
     email: EmailStr
-    purpose: OTPPurpose
 
 
-class OTPVerifyRequest(BaseModel):
+class EmailVerifyConfirmRequest(BaseModel):
     email: EmailStr
-    purpose: OTPPurpose
     code: str = Field(min_length=4, max_length=12)
 
 
@@ -31,3 +27,8 @@ class TwoFactorConfirmRequest(BaseModel):
 
 class TwoFactorDisableRequest(BaseModel):
     password: str
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=255)

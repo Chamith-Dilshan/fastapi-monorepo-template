@@ -48,4 +48,6 @@ class EmailService:
             app_name=settings.APP_NAME,
             first_name=first_name,
         )
-        await self._sender.send(to=to, subject=f"Welcome to {settings.APP_NAME}", html_body=html_body)
+        await self._sender.send(
+            to=to, subject=f"Welcome to {settings.APP_NAME}", html_body=html_body
+        )

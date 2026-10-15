@@ -1,0 +1,85 @@
+# Base services, shared by every environment.
+#   dev:  docker compose up                     (auto-merges the override file)
+#   prod: docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d
+#
+# Everything is configured from one `.env` at the repo root (see
+# .env.example). The compose file overrides only what differs inside the
+# container network — POSTGRES_HOST — so the same `.env` also works when you
+# run the backend directly on your machine.
+
+name: ${COMPOSE_PROJECT_NAME:-app}
+
+# Docker's default log driver keeps container logs forever and unbounded —
+# on a long-lived server that eventually fills the disk. Keep the last 30 MB
+# per container; ship logs elsewhere (Loki, etc.) if you need more history.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Housekeeping (expired tokens/codes, never-verified accounts, optional
+# audit-log retention) is a command, not a service — run it on a schedule
+# from the host's cron, or from Coolify's scheduled tasks:
+#
+#   docker compose run --rm backend python -m app.cleanup
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: always
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: migrations + first-admin bootstrap, once per deploy, before the
+  # backend starts. Kept out of the backend's own startup so several gunicorn
+  # workers never race to migrate.
+  prestart:
+    build: ./backend
+    command: bash scripts/prestart.sh
+    restart: "no"
+    logging: *default-logging
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+
+  backend:
+    build: ./backend
+    restart: always
+    logging: *default-logging
+    depends_on:
+      db:
+        condition: service_healthy
+      prestart:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+    healthcheck:
+      # /health/ready also pings the database; the image has no curl, so
+      # use the interpreter that is already there.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  db-data:
