@@ -7,7 +7,7 @@ logger = get_logger("app.email.console")
 class ConsoleEmailSender(EmailSender):
     """Default sender. Logs the email instead of sending it — used in
     local dev and, implicitly, in tests (nothing in the test suite sets
-    EMAIL_PROVIDER=resend). The full HTML body is logged at DEBUG, so an
+    EMAIL_PROVIDER=resend). The full HTML body is logged at DEBUG so an
     OTP code is actually readable during local testing without a real
     inbox; everything else is INFO.
     """

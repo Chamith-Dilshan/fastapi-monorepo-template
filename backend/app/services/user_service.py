@@ -2,8 +2,12 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.audit import record_audit_event
 from app.core.exceptions import (
     ConflictException,
+    EmailNotVerifiedException,
+    ForbiddenException,
+    InvalidPasswordException,
     NotFoundException,
     UnauthorizedException,
 )
@@ -15,12 +19,17 @@ from app.dtos.user_dto import (
     UserCreateRequest,
     UserUpdateRequest,
 )
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.repositories.user_repository import UserRepository
+
+# Roles allowed to *read* other people's accounts. Writing is admin-only;
+# see the individual methods.
+_USER_DIRECTORY_ROLES = frozenset({UserRole.ADMIN, UserRole.MANAGER})
 
 
 class UserService:
     def __init__(self, db: AsyncSession):
+        self.db = db
         self.repository = UserRepository(db)
 
     async def create_user(
@@ -42,8 +51,8 @@ class UserService:
             first_name=payload.first_name,
             last_name=payload.last_name,
             # role/is_active/is_verified take their column defaults
-            # (USER / True / False) — is_verified flips true once
-            # email-verification OTP support lands (step 3).
+            # (USER / True / False) — is_verified flips true once the
+            # email-verification OTP is confirmed.
         )
 
         new_user = await self.repository.create(user)
@@ -64,17 +73,26 @@ class UserService:
 
         return user
 
+    async def get_user_as(self, actor: User, user_id: UUID) -> User:
+        """Anyone may read their own account; admins and managers may read
+        anyone's. Checked before the lookup so a non-privileged caller gets
+        the same 403 whether the target id exists.
+        """
+        if actor.id != user_id and actor.role not in _USER_DIRECTORY_ROLES:
+            raise ForbiddenException(message="You do not have access to this user")
+        return await self.get_user(user_id)
+
     async def authenticate_user(
         self,
         email: str,
         password: str,
-    ) -> User | None:
+    ) -> User:
         user = await self.repository.get_by_email(email)
 
         # `user.hashed_password is None` covers an OAuth-only account
-        # (e.g., Google signup, step 4) trying to log in with a password it
-        # never set — same generic message as a wrong password, so this
-        # doesn't leak which emails exist or how they signed up.
+        # (e.g., Google signup) trying to log in with a password it never
+        # set — the same generic message as a wrong password, so this doesn't
+        # leak which emails exist or how they signed up.
         if (
             user is None
             or user.hashed_password is None
@@ -84,6 +102,10 @@ class UserService:
 
         if not user.is_active:
             raise UnauthorizedException(message="This account has been disabled")
+
+        # Last, so it is only ever said to someone who knew the password.
+        if not user.is_verified:
+            raise EmailNotVerifiedException()
 
         return user
 
@@ -100,6 +122,23 @@ class UserService:
         user.hashed_password = get_password_hash(new_password)
         return await self.repository.update(user)
 
+    async def reset_password(self, user: User, new_password: str) -> User:
+        """Completing a password reset needed the one-time code
+        emailed to this address, so it proves inbox ownership just as
+        email verification does — the account is verified too. (It also
+        quietly unsticks anyone who registered, never verified, and forgot.)
+        """
+        user.hashed_password = get_password_hash(new_password)
+        user.is_verified = True
+        return await self.repository.update(user)
+
+    async def change_password(
+        self, user: User, current_password: str, new_password: str
+    ) -> User:
+        if not await self.check_password(user, current_password):
+            raise InvalidPasswordException()
+        return await self.set_password(user, new_password)
+
     async def mark_verified(self, user: User) -> User:
         user.is_verified = True
         return await self.repository.update(user)
@@ -110,10 +149,7 @@ class UserService:
 
     async def check_password(self, user: User, password: str) -> bool:
         """Returns a bool instead of raising — used where the caller wants
-        to decide what failure means for itself (e.g. the 2FA-disable
-        endpoint, which should give a normal `InvalidOTPException`-style
-        400, not treat a wrong confirmation password as a full
-        `authenticate_user`-style 401 login failure).
+        to decide what failure means for itself.
         """
         if user.hashed_password is None:
             return False
@@ -131,35 +167,91 @@ class UserService:
 
     async def update_user(
         self,
+        actor: User,
         user_id: UUID,
         payload: UserUpdateRequest,
     ) -> User:
+        # Self or admin. Role, status and password are *not* editable here
+        # — they have their own, stricter paths (change_role, set_active,
+        # change_password) so each can carry its own rule and audit entry.
+        if actor.id != user_id and actor.role != UserRole.ADMIN:
+            raise ForbiddenException(message="You do not have access to this user")
 
         user = await self.get_user(user_id)
 
-        update_data = payload.model_dump(exclude_unset=True)
-
-        # UserUpdateRequest.password is a plain-text field (API input
-        # shape); User.hashed_password is the actual column. A blind
-        # setattr loop over DTO field names would either silently no-op
-        # (the column is named differently, so it'd set a stray
-        # non-persisted attribute) or, worse, write an unhashed password
-        # straight to the DB if the names ever matched again — handle it
-        # explicitly instead of ever letting that loop touch credentials.
-        password = update_data.pop("password", None)
-        if password is not None:
-            user.hashed_password = get_password_hash(password)
-
-        for field, value in update_data.items():
-            setattr(user, field, value)
+        for field, value in payload.model_dump(exclude_unset=True).items():
+            # An explicit `null` for a NOT NULL column would be a 500 from
+            # the database; "no change" is the only sensible reading.
+            if value is not None:
+                setattr(user, field, value)
 
         return await self.repository.update(user)
 
-    async def delete_user(
-        self,
-        user_id: UUID,
-    ) -> None:
+    async def change_role(self, actor: User, user_id: UUID, new_role: UserRole) -> User:
+        # An admin demoting themselves is how a system ends up with no
+        # admin at all, so it simply isn't allowed — another admin must do it.
+        if actor.id == user_id:
+            raise ForbiddenException(message="You cannot change your own role")
 
         user = await self.get_user(user_id)
+        old_role = user.role
+        if old_role == new_role:
+            return user
+
+        user.role = new_role
+        user = await self.repository.update(user)
+
+        await record_audit_event(
+            self.db,
+            action="user.role_changed",
+            resource_type="user",
+            resource_id=str(user.id),
+            actor_user_id=actor.id,
+            before={"role": old_role.value},
+            after={"role": new_role.value},
+        )
+        return user
+
+    async def set_active(self, actor: User, user_id: UUID, *, is_active: bool) -> User:
+        if actor.id == user_id:
+            raise ForbiddenException(message="You cannot change your own status")
+
+        user = await self.get_user(user_id)
+        if user.is_active == is_active:
+            return user
+
+        user.is_active = is_active
+        user = await self.repository.update(user)
+
+        await record_audit_event(
+            self.db,
+            action="user.activated" if is_active else "user.deactivated",
+            resource_type="user",
+            resource_id=str(user.id),
+            actor_user_id=actor.id,
+            before={"is_active": not is_active},
+            after={"is_active": is_active},
+        )
+        return user
+
+    async def delete_user(
+        self,
+        actor: User,
+        user_id: UUID,
+    ) -> None:
+        if actor.id == user_id:
+            raise ForbiddenException(message="You cannot delete your own account")
+
+        user = await self.get_user(user_id)
+        snapshot = {"email": user.email, "role": user.role.value}
 
         await self.repository.delete(user)
+
+        await record_audit_event(
+            self.db,
+            action="user.deleted",
+            resource_type="user",
+            resource_id=str(user_id),
+            actor_user_id=actor.id,
+            before=snapshot,
+        )

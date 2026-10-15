@@ -17,6 +17,9 @@ class OTPPurpose(StrEnum):
     EMAIL_VERIFICATION = "email_verification"
     PASSWORD_RESET = "password_reset"
     TWO_FACTOR = "two_factor"
+    # Not an emailed code: the one-time code the Google callback hands the
+    # frontend so tokens never travel in a URL. See OTPService.issue_exchange_code.
+    OAUTH_LOGIN = "oauth_login"
 
 
 class OTPCode(Base):
@@ -63,7 +66,7 @@ class OTPCode(Base):
     )
 
     # Failed to verify attempts against this specific row. otp_service should
-    # stop accepting attempts past a small limit (e.g. 5) even before
+    # stop accepting attempts past a small limit (e.g., 5) even before
     # expiry, to blunt brute-forcing a 6-digit code.
     attempts: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False

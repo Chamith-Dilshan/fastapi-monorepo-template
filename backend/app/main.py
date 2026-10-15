@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.api.v1 import auth, oauth, users
+from app.api.v1 import admin, auth, oauth, users
 from app.core.config import settings
 from app.core.database import engine
 from app.core.exception_handlers import register_exception_handlers
@@ -49,7 +49,6 @@ async def lifespan(_app: FastAPI):
     # F2 finding. Tests still use `create_all()` directly in
     # `tests/conftest.py`, which is a separate, deliberate shortcut.
     logger.info("app_startup", environment=settings.ENVIRONMENT)
-    # await create_tables()
     yield
     await engine.dispose()
     logger.info("app_shutdown")
@@ -78,6 +77,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(oauth.router)
 app.include_router(users.router)
+app.include_router(admin.router)
 
 # Exposes GET /metrics in Prometheus text format — request counts, latency
 # histograms, in-progress requests, by path/method/status. Always on:

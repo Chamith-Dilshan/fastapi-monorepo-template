@@ -28,11 +28,17 @@ describing, and let that change's own commit cover both rows — an audit
 row for a writing that got rolled back would be worse than no audit row.
 """
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.request_context import get_request_id
+from app.core.request_context import (
+    USER_AGENT_MAX_LENGTH,
+    client_ip_var,
+    get_request_id,
+    user_agent_var,
+)
 from app.models.audit_log import AuditLog
 
 
@@ -49,7 +55,12 @@ async def record_audit_event(
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> AuditLog:
+    agent = user_agent or user_agent_var.get()
     entry = AuditLog(
+        # The wall clock, not the column's server default: Postgres now() is
+        # the *transaction's* start time, so two events recorded in one
+        # transaction would get the same timestamp and lose their order.
+        created_at=datetime.now(UTC),
         actor_user_id=actor_user_id,
         action=action,
         resource_type=resource_type,
@@ -58,8 +69,11 @@ async def record_audit_event(
         after=after,
         metadata_=metadata,
         request_id=get_request_id(),
-        ip_address=ip_address,
-        user_agent=user_agent,
+        # Default to whoever made the current request, so callers in the
+        # service layer never have to pass these. A job or script (no
+        # request) simply records none.
+        ip_address=ip_address or client_ip_var.get(),
+        user_agent=agent[:USER_AGENT_MAX_LENGTH] if agent else None,
     )
     db.add(entry)
     await db.flush()

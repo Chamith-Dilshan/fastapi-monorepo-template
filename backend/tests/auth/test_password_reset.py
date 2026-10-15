@@ -1,87 +1,94 @@
 import pytest
 
+from app.models.otp_code import OTPPurpose
 
-async def _register(client, faker, password="StrongP@ssw0rd!"):
-    payload = {
-        "email": faker.unique.email(),
-        "password": password,
-        "first_name": faker.first_name(),
-        "last_name": faker.last_name(),
-    }
-    reg = await client.post("/api/v1/auth/register", json=payload)
-    assert reg.status_code == 201, reg.text
-    return payload
+FORGOT = "/api/v1/auth/password/forgot"
+RESET = "/api/v1/auth/password/reset"
+LOGIN = "/api/v1/auth/login"
+OLD = "StrongP@ssw0rd!"
+NEW = "EvenStronger!42"
 
 
 @pytest.mark.asyncio
-async def test_full_password_reset_flow(client, faker, monkeypatch):
-    captured: dict[str, str] = {}
+async def test_full_password_reset_flow(client, make_user, sent_codes):
+    user = await make_user()
 
-    async def fake_send_otp_code(self, *, to, purpose, code):  # noqa: ARG001 -- must match EmailService.send_otp_code's real signature
-        captured["code"] = code
-
-    monkeypatch.setattr(
-        "app.services.email_service.EmailService.send_otp_code", fake_send_otp_code
-    )
-
-    payload = await _register(client, faker)
-
-    forgot = await client.post(
-        "/api/v1/auth/password/forgot", json={"email": payload["email"], "purpose": "password_reset"}
-    )
+    forgot = await client.post(FORGOT, json={"email": user.email})
     assert forgot.status_code == 202
-    assert "code" in captured
+    assert sent_codes[0]["purpose"] == OTPPurpose.PASSWORD_RESET
 
-    new_password = "EvenStronger!42"
     reset = await client.post(
-        "/api/v1/auth/password/reset",
-        json={"email": payload["email"], "code": captured["code"], "new_password": new_password},
+        RESET,
+        json={"email": user.email, "code": sent_codes[0]["code"], "new_password": NEW},
     )
     assert reset.status_code == 200, reset.text
 
-    # Old password no longer works.
-    old_login = await client.post(
-        "/api/v1/auth/login",
-        data={"username": payload["email"], "password": payload["password"]},
-    )
-    assert old_login.status_code == 401
-
-    # New password does.
-    new_login = await client.post(
-        "/api/v1/auth/login",
-        data={"username": payload["email"], "password": new_password},
-    )
-    assert new_login.status_code == 200, new_login.text
-    assert "access_token" in new_login.json()
+    old = await client.post(LOGIN, data={"username": user.email, "password": OLD})
+    assert old.status_code == 401
+    new = await client.post(LOGIN, data={"username": user.email, "password": NEW})
+    assert new.status_code == 200
+    assert new.json()["access_token"]
 
 
 @pytest.mark.asyncio
-async def test_forgot_password_does_not_reveal_whether_email_exists(client):
-    response = await client.post(
-        "/api/v1/auth/password/forgot",
-        json={"email": "nobody-at-all@example.com", "purpose": "password_reset"},
-    )
-    # Same 202 a real email gets — see test_full_password_reset_flow.
-    assert response.status_code == 202
+async def test_forgot_password_does_not_reveal_whether_the_email_exists(
+    client, sent_codes
+):
+    response = await client.post(FORGOT, json={"email": "nobody-at-all@example.com"})
+    assert response.status_code == 202  # same answer a real account gets
+    assert sent_codes == []
 
 
 @pytest.mark.asyncio
-async def test_reset_with_wrong_code_fails(client, faker, monkeypatch):
-    async def fake_send_otp_code(self, *, to, purpose, code):  # noqa: ARG001 -- must match EmailService.send_otp_code's real signature
-        pass
-
-    monkeypatch.setattr(
-        "app.services.email_service.EmailService.send_otp_code", fake_send_otp_code
-    )
-
-    payload = await _register(client, faker)
-    await client.post(
-        "/api/v1/auth/password/forgot", json={"email": payload["email"], "purpose": "password_reset"}
-    )
+async def test_reset_with_a_wrong_code_fails(client, make_user, sent_codes):
+    user = await make_user()
+    await client.post(FORGOT, json={"email": user.email})
+    real = sent_codes[0]["code"]
+    wrong = "0" * len(real) if real != "0" * len(real) else "1" * len(real)
 
     response = await client.post(
-        "/api/v1/auth/password/reset",
-        json={"email": payload["email"], "code": "000000", "new_password": "WhateverNew1!"},
+        RESET, json={"email": user.email, "code": wrong, "new_password": NEW}
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_otp"
+
+
+@pytest.mark.asyncio
+async def test_reset_for_an_unknown_email_looks_like_a_wrong_code(client):
+    response = await client.post(
+        RESET,
+        json={"email": "nobody@example.com", "code": "123456", "new_password": NEW},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_otp"
+
+
+@pytest.mark.asyncio
+async def test_a_reset_code_cannot_be_used_twice(client, make_user, sent_codes):
+    user = await make_user()
+    await client.post(FORGOT, json={"email": user.email})
+    body = {"email": user.email, "code": sent_codes[0]["code"], "new_password": NEW}
+
+    assert (await client.post(RESET, json=body)).status_code == 200
+    assert (await client.post(RESET, json=body)).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_resetting_also_verifies_an_unverified_account(
+    client, make_user, sent_codes
+):
+    """Whoever completes a reset held the emailed code, i.e. the inbox — so
+    someone who registered, never verified and forgot can recover through
+    here instead of being stuck."""
+    user = await make_user(is_verified=False)
+    blocked = await client.post(LOGIN, data={"username": user.email, "password": OLD})
+    assert blocked.status_code == 403
+
+    await client.post(FORGOT, json={"email": user.email})
+    await client.post(
+        RESET,
+        json={"email": user.email, "code": sent_codes[0]["code"], "new_password": NEW},
+    )
+
+    login = await client.post(LOGIN, data={"username": user.email, "password": NEW})
+    assert login.status_code == 200

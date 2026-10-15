@@ -15,9 +15,18 @@ Two independent, separately gated pieces:
   dev even if a DSN is present, so local exceptions don't get reported.
 """
 
+from typing import TYPE_CHECKING
+
 import structlog
 
 from app.core.config import settings
+
+if TYPE_CHECKING:
+    # Only needed for the type hint below — the actual FastAPI/OTel
+    # imports stay deferred inside configure_opentelemetry() itself, so
+    # importing the real `fastapi` package doesn't happen at all when
+    # OTEL_ENABLED=false.
+    from fastapi import FastAPI
 
 logger = structlog.get_logger("app.observability")
 
@@ -39,7 +48,7 @@ def configure_sentry() -> None:
     logger.info("sentry_configured", environment=settings.ENVIRONMENT)
 
 
-def configure_opentelemetry(app: object) -> None:
+def configure_opentelemetry(app: FastAPI) -> None:
     if not settings.OTEL_ENABLED:
         return
 

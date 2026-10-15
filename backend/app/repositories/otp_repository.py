@@ -24,7 +24,7 @@ class OTPRepository:
     async def get_active(self, user_id: UUID, purpose: OTPPurpose) -> OTPCode | None:
         """The most recent not-yet-consumed row for this user/purpose,
         regardless of whether it's expired — the service layer decides
-        expired-vs-valid, this just finds the candidate to check.
+        expired-vs.-valid, this just finds the candidate to check.
         """
         try:
             result = await self.db.execute(
@@ -44,7 +44,7 @@ class OTPRepository:
     async def invalidate_active(self, user_id: UUID, purpose: OTPPurpose) -> None:
         """Marks every not-yet-consumed row for this user/purpose as
         consumed (without real verification), so requesting a new code
-        makes the previous one stop working instead of leaving two valid
+        makes the previous one-stop working instead of leaving two valid
         codes outstanding at once.
         """
         try:

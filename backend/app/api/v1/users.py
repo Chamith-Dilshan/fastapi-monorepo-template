@@ -1,17 +1,19 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Query, status
 
 from app.core.config import settings
 from app.dependancies.database_dep import SessionDep
-from app.dependancies.security_dep import get_current_user_dep
+from app.dependancies.rbac_dep import AdminUser, StaffUser
+from app.dependancies.security_dep import CurrentUser
 from app.dtos.user_dto import (
     UserListResponse,
     UserResponse,
+    UserRoleUpdateRequest,
+    UserStatusUpdateRequest,
     UserUpdateRequest,
 )
-from app.models.user import User
 from app.services.user_service import UserService
 
 router = APIRouter(
@@ -22,50 +24,30 @@ router = APIRouter(
 SkipQuery = Annotated[int, Query(ge=0)]
 LimitQuery = Annotated[int, Query(ge=1, le=100)]
 
-# Reusable alias
-CurrentUser = Annotated[User, Depends(get_current_user_dep)]
-
-# NOTE: every route below requires *a* valid logged-in user (via
-# CurrentUser), but not yet a specific role — any authenticated user can
-# currently list/view/edit/delete any other user by id. That's a real gap,
-# not just unused-argument noise: once `core/rbac.py` and
-# `require_role()` land (ground-template plan, step 5), these should
-# become `require_role(UserRole.ADMIN)` instead of a bare `CurrentUser`.
-# The leading underscore below is only there to tell Ruff the parameter
-# is deliberately unused for now, not a statement that auth is unused.
+# Who can do what (enforced here for the role gate, and in UserService for
+# the "self or ..." rules that depend on *which* user is being touched):
+#
+#   list users ............ admin, manager
+#   read a user ........... self, admin, manager
+#   edit profile .......... self, admin
+#   change role/status .... admin (never on yourself)
+#   delete ................ admin (never yourself)
 
 
-@router.get(
-    "",
-    response_model=UserListResponse,
-)
+@router.get("", response_model=UserListResponse)
 async def list_users(
     db: SessionDep,
-    _current_user: CurrentUser,
+    _staff: StaffUser,
     skip: SkipQuery = 0,
     limit: LimitQuery = 10,
 ):
-    service = UserService(db)
-
-    users, total = await service.list_users(
-        skip,
-        limit,
-    )
-
-    return {
-        "total": total,
-        "items": users,
-    }
+    users, total = await UserService(db).list_users(skip, limit)
+    return {"total": total, "items": users}
 
 
-@router.get(
-    "/{user_id}",
-    response_model=UserResponse,
-)
-async def get_user(user_id: UUID, db: SessionDep, _current_user: CurrentUser):
-    service = UserService(db)
-
-    return await service.get_user(user_id)
+@router.get("/{user_id}", response_model=UserResponse)
+async def get_user(user_id: UUID, db: SessionDep, current_user: CurrentUser):
+    return await UserService(db).get_user_as(current_user, user_id)
 
 
 @router.patch("/{user_id}", response_model=UserResponse)
@@ -73,21 +55,31 @@ async def update_user(
     user_id: UUID,
     payload: UserUpdateRequest,
     db: SessionDep,
-    _current_user: CurrentUser,
+    current_user: CurrentUser,
 ):
-    service = UserService(db)
-
-    return await service.update_user(
-        user_id,
-        payload,
-    )
+    return await UserService(db).update_user(current_user, user_id, payload)
 
 
-@router.delete(
-    "/{user_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-async def delete_user(user_id: UUID, db: SessionDep, _current_user: CurrentUser):
-    service = UserService(db)
+@router.patch("/{user_id}/role", response_model=UserResponse)
+async def change_user_role(
+    user_id: UUID,
+    payload: UserRoleUpdateRequest,
+    db: SessionDep,
+    admin: AdminUser,
+):
+    return await UserService(db).change_role(admin, user_id, payload.role)
 
-    await service.delete_user(user_id)
+
+@router.patch("/{user_id}/status", response_model=UserResponse)
+async def change_user_status(
+    user_id: UUID,
+    payload: UserStatusUpdateRequest,
+    db: SessionDep,
+    admin: AdminUser,
+):
+    return await UserService(db).set_active(admin, user_id, is_active=payload.is_active)
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(user_id: UUID, db: SessionDep, admin: AdminUser):
+    await UserService(db).delete_user(admin, user_id)

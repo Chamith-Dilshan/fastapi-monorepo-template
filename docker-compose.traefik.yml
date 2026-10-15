@@ -1,0 +1,78 @@
+# Production on a single host with Traefik terminating TLS:
+#   docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d
+#
+# Needs DOMAIN and ACME_EMAIL in `.env`, and DNS for DOMAIN pointing at this
+# host. Only /api is routed to the backend — /health and /metrics are never
+# reachable from outside; Prometheus scrapes them over the internal network.
+#
+# Deploying through Coolify instead? Coolify runs its own proxy, so use only
+# docker-compose.yml there and let Coolify attach the domain; this file's
+# Traefik service would fight it for ports 80/443.
+
+services:
+  traefik:
+    image: traefik:v3.7
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=traefik-public
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Every plain-HTTP request is redirected to HTTPS.
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/certificates/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Read-only: Traefik only needs to *see* containers, never control them.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certificates:/certificates
+    networks:
+      - traefik-public
+
+  backend:
+    networks:
+      - default
+      - traefik-public
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME:-app}-backend.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME:-app}-backend.entrypoints=websecure
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME:-app}-backend.tls.certresolver=letsencrypt
+      - traefik.http.services.${COMPOSE_PROJECT_NAME:-app}-backend.loadbalancer.server.port=8000
+    environment:
+      ENVIRONMENT: production
+      # Behind Traefik the TCP peer is always Traefik, so without this the
+      # audit log and request logs would record Traefik's address instead of
+      # the client's (measured: gunicorn ignores X-Forwarded-For from any
+      # address but 127.0.0.1 by default). "*" is only safe because this
+      # service publishes no ports here: the sole things that can reach it
+      # are containers on the Docker networks above. Never copy this to a
+      # setup where the backend port is open to the internet — anyone could
+      # then forge the client IP.
+      FORWARDED_ALLOW_IPS: "*"
+
+  prestart:
+    environment:
+      ENVIRONMENT: production
+
+  # When the Next.js frontend lands, it joins `traefik-public` the same way,
+  # with a router for Host(`${DOMAIN}`) at a *lower* priority than the /api
+  # router above, so one domain serves both and the browser needs no CORS.
+
+volumes:
+  traefik-certificates:
+
+networks:
+  traefik-public:

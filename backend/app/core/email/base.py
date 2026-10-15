@@ -23,6 +23,11 @@ def get_email_sender() -> EmailSender:
 
         return ResendEmailSender()
 
+    if settings.EMAIL_PROVIDER == "smtp":
+        from app.core.email.smtp_sender import SmtpEmailSender
+
+        return SmtpEmailSender()
+
     from app.core.email.console_sender import ConsoleEmailSender
 
     return ConsoleEmailSender()

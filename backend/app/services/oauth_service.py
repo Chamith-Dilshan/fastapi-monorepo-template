@@ -1,8 +1,8 @@
 """Google OAuth2 authorization-code flow, implemented directly against
-Google's documented endpoints with plain httpx — no OAuth client library.
+Google's documented endpoints with a plain httpx — no OAuth client library.
 For one provider doing a standard code exchange, a library buys little
 (see the note in GoogleOAuthService's docstring on why Authlib specifically
-was skipped) and this is the whole flow in about 30 lines.
+was skipped), and this is the whole flow in about 30 lines.
 
 Adding a second provider later: this class's three methods
 (authorize_url / exchange_code_for_profile / the Profile shape) are the
@@ -18,13 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import UnauthorizedException
-from app.core.security import create_access_token
-from app.dtos.token_dto import Token
 from app.models.oauth_account import OAuthProvider
 from app.models.user import User
 from app.repositories.oauth_repository import OAuthRepository
 from app.repositories.user_repository import UserRepository
 from app.services.email_service import EmailService
+from app.services.otp_service import OTPService
 
 GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -136,6 +135,7 @@ class OAuthService:
             assert user is not None, (
                 "OAuthAccount referenced a user that no longer exists"
             )
+            self._require_active(user)
             return user, False
 
         # No link yet. If a user with this email already exists (they
@@ -144,6 +144,25 @@ class OAuthService:
         # in. Otherwise, create a brand-new account.
         user = await self.user_repository.get_by_email(profile.email)
         is_new_user = user is None
+
+        if user is not None:
+            # Linking by email is only safe if the provider vouches that the
+            # person signing in really owns that address. Without this check
+            # anyone could attach a Google identity claiming someone else's
+            # email to that person's account.
+            if not profile.email_verified:
+                raise UnauthorizedException(message="Google sign-in failed")
+            self._require_active(user)
+            if not user.is_verified:
+                # Pre-hijacking guard: an *unverified* account may have been
+                # registered by a stranger who typed this email plus a
+                # password of their choosing. The real owner just proved
+                # they hold the address, so the account becomes theirs — and
+                # whatever password was set before that proof is discarded.
+                user.hashed_password = None
+                user.is_verified = True
+                await self.user_repository.update(user)
+
         if user is None:
             user = User(
                 email=profile.email,
@@ -164,7 +183,13 @@ class OAuthService:
         # together when the /auth/google/callback route returns.
         return user, is_new_user
 
-    async def issue_token_and_welcome(self, user: User, *, is_new_user: bool) -> Token:
+    @staticmethod
+    def _require_active(user: User) -> None:
+        if not user.is_active:
+            raise UnauthorizedException(message="This account has been disabled")
+
+    async def complete_sign_in(self, user: User, *, is_new_user: bool) -> str:
+        """Returns the one-time exchange code for the frontend redirect."""
         if is_new_user:
             try:
                 await EmailService().send_welcome_email(
@@ -175,5 +200,4 @@ class OAuthService:
                 # not a failed sign-in.
                 pass
 
-        access_token = create_access_token(data={"sub": str(user.id)})
-        return Token(access_token=access_token, token_type="bearer")
+        return await OTPService(self.db).issue_exchange_code(user)
