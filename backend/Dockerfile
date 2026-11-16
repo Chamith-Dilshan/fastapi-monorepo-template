@@ -27,7 +27,8 @@ COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    # gunicorn reads this natively as its default worker count.
+
+# gunicorn reads this natively as its default worker count.
     WEB_CONCURRENCY=4
 
 COPY --chown=app:app app ./app
